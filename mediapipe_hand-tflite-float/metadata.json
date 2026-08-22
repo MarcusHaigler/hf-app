@@ -1,0 +1,89 @@
+{
+    "model_id": "mediapipe_hand",
+    "model_name": "MediaPipe-Hand-Detection",
+    "runtime": "tflite",
+    "precision": "float",
+    "tool_versions": {
+        "qairt": "2.45.0.260326154327"
+    },
+    "model_files": {
+        "hand_detector.tflite": {
+            "inputs": {
+                "image": {
+                    "shape": [
+                        1,
+                        256,
+                        256,
+                        3
+                    ],
+                    "dtype": "float32",
+                    "io_type": "image",
+                    "image_metadata": {},
+                    "value_range": [
+                        0.0,
+                        1.0
+                    ]
+                }
+            },
+            "outputs": {
+                "box_coords": {
+                    "shape": [
+                        1,
+                        2944,
+                        18
+                    ],
+                    "dtype": "float32"
+                },
+                "box_scores": {
+                    "shape": [
+                        1,
+                        2944,
+                        1
+                    ],
+                    "dtype": "float32"
+                }
+            }
+        },
+        "hand_landmark_detector.tflite": {
+            "inputs": {
+                "image": {
+                    "shape": [
+                        1,
+                        256,
+                        256,
+                        3
+                    ],
+                    "dtype": "float32",
+                    "io_type": "image",
+                    "image_metadata": {},
+                    "value_range": [
+                        0.0,
+                        1.0
+                    ]
+                }
+            },
+            "outputs": {
+                "scores": {
+                    "shape": [
+                        1
+                    ],
+                    "dtype": "float32"
+                },
+                "lr": {
+                    "shape": [
+                        1
+                    ],
+                    "dtype": "float32"
+                },
+                "landmarks": {
+                    "shape": [
+                        1,
+                        21,
+                        3
+                    ],
+                    "dtype": "float32"
+                }
+            }
+        }
+    }
+}
