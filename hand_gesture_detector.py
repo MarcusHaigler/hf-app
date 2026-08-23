@@ -38,7 +38,7 @@ border_crossed = False
 gesture_thread = None
 gesture_thread_lock = threading.Lock()
 gesture_queue = queue.Queue()
-current_gesture = None
+last_gesture = None
 
 def check_gesture_queue():
     '''
@@ -46,22 +46,24 @@ def check_gesture_queue():
     This function blocks on `gesture_queue.get()` so it runs as a background thread.
     '''
 
-    global gesture_queue, current_gesture
+    global gesture_queue, last_gesture
 
     while True:
         try:
             # Block until a gesture is available
-            last_gesture = gesture_queue.get()
+            current_gesture = gesture_queue.get()
+            if current_gesture == 'None':
+                continue
+            else:
 
-            # Allow a None sentinel to stop the thread if ever used
-            if last_gesture is None:
-                break
+                # Allow a None sentinel to stop the thread if ever used
+                if current_gesture is None:
+                    break
 
-            # Print when the gesture has changed (or first seen)
-            if current_gesture is None or current_gesture != last_gesture:
-                print(f'detected gesture: {last_gesture}')
-                current_gesture = last_gesture
-            # otherwise ignore duplicate consecutive gestures
+                # Print when the gesture has changed (or first seen)
+                if last_gesture is None or last_gesture != current_gesture:
+                    print(f'detected gesture: {current_gesture}')
+                    last_gesture = current_gesture
 
         except Exception as exc:
             # Keep the thread alive on unexpected errors
