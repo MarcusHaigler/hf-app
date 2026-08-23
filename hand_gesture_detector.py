@@ -40,13 +40,80 @@ gesture_thread_lock = threading.Lock()
 gesture_queue = queue.Queue()
 last_gesture = None
 
+def activate_border(image=None, top_landmark=None, bottom_landmark=None, border_state=None):
+    '''
+    Create and activate the border from a background thread or direct call.
+    When landmark coordinates are supplied, a circle is created around the hand
+    using the same sizing logic as draw_border().
+    '''
+    global border_active, border_center, border_radius, border_crossed
+
+    if border_state is None:
+        border_state = {"active": False, "center": None, "radius": 0, "crossed": False}
+
+    if image is not None and top_landmark is not None and bottom_landmark is not None:
+        image = draw_border(image, top_landmark, bottom_landmark, border_state)
+    elif top_landmark is not None and bottom_landmark is not None:
+        if hasattr(top_landmark, 'x') and hasattr(top_landmark, 'y'):
+            top_x, top_y = top_landmark.x, top_landmark.y
+        else:
+            top_x, top_y = top_landmark
+
+        if hasattr(bottom_landmark, 'x') and hasattr(bottom_landmark, 'y'):
+            bottom_x, bottom_y = bottom_landmark.x, bottom_landmark.y
+        else:
+            bottom_x, bottom_y = bottom_landmark
+
+        if isinstance(top_x, (int, float)) and isinstance(top_y, (int, float)) and isinstance(bottom_x, (int, float)) and isinstance(bottom_y, (int, float)):
+            center_x = (top_x + bottom_x) / 2.0
+            center_y = (top_y + bottom_y) / 2.0
+            radius = max(25, np.hypot(bottom_x - top_x, bottom_y - top_y) * 1.5)
+            border_state["center"] = (int(center_x), int(center_y))
+            border_state["radius"] = int(radius)
+        else:
+            # Normalized landmark coordinates are handled by draw_border(); if they
+            # are provided without an image we can only keep the current state alive.
+            border_state["active"] = True
+            border_state["crossed"] = False
+            border_active = True
+            border_center = border_state["center"]
+            border_radius = border_state["radius"]
+            border_crossed = False
+            return border_state
+
+    if border_state["center"] is None or border_state["radius"] <= 0:
+        border_state["active"] = False
+        border_state["crossed"] = False
+        return border_state
+
+    border_state["active"] = True
+    border_state["crossed"] = False
+    border_active = True
+    border_center = border_state["center"]
+    border_radius = border_state["radius"]
+    border_crossed = False
+
+    return border_state
+
+active_gesture_chain = []
+
+neutral_state_mapping = {
+    ["Open_Palm", "Closed_Fist", "Open_Palm"] : activate_border(),
+}
+
+def update_gesture_chain(new_val):
+    '''
+    shift values in list to add new values
+    '''
+
+
 def check_gesture_queue():
     '''
     Continuously monitor the gesture queue and print new gestures when they change.
     This function blocks on `gesture_queue.get()` so it runs as a background thread.
     '''
 
-    global gesture_queue, last_gesture
+    global gesture_queue, last_gesture, active_gesture_chain
 
     while True:
         try:
@@ -60,9 +127,14 @@ def check_gesture_queue():
                 if current_gesture is None:
                     break
 
-                # Print when the gesture has changed (or first seen)
+                # Print valid gestures
                 if last_gesture is None or last_gesture != current_gesture:
                     print(f'detected gesture: {current_gesture}')
+                    if len(active_gesture_chain) < 3:
+                        active_gesture_chain.append(current_gesture)
+                    else:
+                        update_gesture_chain(current_gesture)
+
                     last_gesture = current_gesture
 
         except Exception as exc:
