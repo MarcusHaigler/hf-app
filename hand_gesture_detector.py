@@ -1,3 +1,5 @@
+# Import the camera, numerical, MediaPipe, and threading tools used by the
+# asynchronous detection pipeline and the OpenCV display loop.
 import threading
 import cv2  # OpenCV for camera capture and image display
 import numpy as np  # NumPy for array handling and image conversion
@@ -7,16 +9,17 @@ from mediapipe.tasks.python import vision  # MediaPipe vision tasks
 
 import queue
 
-from dummy_cmds import *  # Import the dummy test function from the dummy_cmds module
+from dummy_cmds import *  # Import optional command functions used by gestures.
 
-# Visual styling constants for the detection overlay
+# These constants control the appearance of gesture labels and landmark dots.
 MARGIN = 10  # Space between the bounding box and the text label
 ROW_SIZE = 10  # Text line height for the overlay
 FONT_SIZE = 1  # Font scale for the label text
 FONT_THICKNESS = 1  # Line thickness for the text
 TEXT_COLOR = (255, 0, 0)  # Red color for boxes and labels
 
-# Storage for the latest detection result and the frame it came from
+# MediaPipe returns results asynchronously. These variables let the camera loop
+# safely pair the newest result with the frame that produced it.
 latest_result = None  # Holds the most recent detection output
 latest_frame_bgr = None  # Holds the most recent frame in BGR format for drawing
 frame_pending = False  # Whether a request is already in flight for async detection
@@ -24,88 +27,78 @@ pending_frame_bgr = None  # The frame that was sent to the detector for the pend
 pending_timestamp = None  # Timestamp associated with the pending request
 state_lock = threading.Lock()  # Protect shared callback state
 
-# Track each hand separately so left and right hands can be evaluated independently.
+# Each hand owns its gesture and border state so two hands do not overwrite one
+# another while the visualizer processes a detection result.
 left_hand_state = {"gesture": "Unknown", "active": False}
 right_hand_state = {"gesture": "Unknown", "active": False}
-left_border_state = {"active": False, "center": None, "radius": 0, "crossed": False}
-right_border_state = {"active": False, "center": None, "radius": 0, "crossed": False}
+left_border_state = {"active": False, "center": None, "radius": 0, "crossed": False, "crossing_point": None, "crossing_direction": None}
+right_border_state = {"active": False, "center": None, "radius": 0, "crossed": False, "crossing_point": None, "crossing_direction": None}
 
+# The gesture-monitoring thread sets this flag; the visualizer consumes it on a
+# later frame, where it has the landmarks and image needed to draw the border.
+activate_border_flag = False
 border_active = False
 border_center = None
 border_radius = 0
 border_crossed = False
 
+# Gesture labels travel from visualize() to this queue, then are consumed by a
+# daemon thread that recognizes ordered gesture sequences.
 gesture_thread = None
 gesture_thread_lock = threading.Lock()
 gesture_queue = queue.Queue()
 last_gesture = None
 
-def activate_border(image=None, top_landmark=None, bottom_landmark=None, border_state=None):
+def activate_border():
     '''
-    Create and activate the border from a background thread or direct call.
-    When landmark coordinates are supplied, a circle is created around the hand
-    using the same sizing logic as draw_border().
+    set the border state to active so the main thread will automatically begin the border
     '''
-    global border_active, border_center, border_radius, border_crossed
+    # This function is the action stored in neutral_state_mapping. It only
+    # requests activation; visualize() performs the actual geometry calculation.
+    global activate_border_flag, state_lock
 
-    if border_state is None:
-        border_state = {"active": False, "center": None, "radius": 0, "crossed": False}
+    with state_lock:
+        try:
 
-    if image is not None and top_landmark is not None and bottom_landmark is not None:
-        image = draw_border(image, top_landmark, bottom_landmark, border_state)
-    elif top_landmark is not None and bottom_landmark is not None:
-        if hasattr(top_landmark, 'x') and hasattr(top_landmark, 'y'):
-            top_x, top_y = top_landmark.x, top_landmark.y
-        else:
-            top_x, top_y = top_landmark
+            if not activate_border_flag:
+                activate_border_flag = True
 
-        if hasattr(bottom_landmark, 'x') and hasattr(bottom_landmark, 'y'):
-            bottom_x, bottom_y = bottom_landmark.x, bottom_landmark.y
-        else:
-            bottom_x, bottom_y = bottom_landmark
+        except Exception as e:
+            print(f'error: {e}')
+            return
 
-        if isinstance(top_x, (int, float)) and isinstance(top_y, (int, float)) and isinstance(bottom_x, (int, float)) and isinstance(bottom_y, (int, float)):
-            center_x = (top_x + bottom_x) / 2.0
-            center_y = (top_y + bottom_y) / 2.0
-            radius = max(25, np.hypot(bottom_x - top_x, bottom_y - top_y) * 1.5)
-            border_state["center"] = (int(center_x), int(center_y))
-            border_state["radius"] = int(radius)
-        else:
-            # Normalized landmark coordinates are handled by draw_border(); if they
-            # are provided without an image we can only keep the current state alive.
-            border_state["active"] = True
-            border_state["crossed"] = False
-            border_active = True
-            border_center = border_state["center"]
-            border_radius = border_state["radius"]
-            border_crossed = False
-            return border_state
+# The newest gesture is stored at index 0. Older gestures shift toward index 2,
+# allowing the mapping below to match a three-gesture command sequence.
+a = None
+b = None 
+c = None
+active_gesture_chain = [a, b, c]
 
-    if border_state["center"] is None or border_state["radius"] <= 0:
-        border_state["active"] = False
-        border_state["crossed"] = False
-        return border_state
-
-    border_state["active"] = True
-    border_state["crossed"] = False
-    border_active = True
-    border_center = border_state["center"]
-    border_radius = border_state["radius"]
-    border_crossed = False
-
-    return border_state
-
-active_gesture_chain = []
-
+# Map a recognized gesture sequence to the action it should trigger.
 neutral_state_mapping = {
-    ["Open_Palm", "Closed_Fist", "Open_Palm"] : activate_border(),
+    ("Open_Palm", "Closed_Fist", "Open_Palm"): activate_border,
 }
 
 def update_gesture_chain(new_val):
     '''
-    shift values in list to add new values
+    Shift the existing gestures and place the newest gesture first.
     '''
+    # The queue thread calls this after a new label arrives. Once the complete
+    # chain matches a key, the associated callable is invoked immediately.
+    global a, b, c, active_gesture_chain
 
+    c = b
+    b = a
+    a = new_val
+    active_gesture_chain[:] = [a, b, c]
+
+    print(f'active gesture chain updated: {active_gesture_chain}')
+
+    action = neutral_state_mapping.get(tuple(active_gesture_chain))
+    if action is not None:
+        
+        action()
+        print('action triggered')
 
 def check_gesture_queue():
     '''
@@ -113,6 +106,8 @@ def check_gesture_queue():
     This function blocks on `gesture_queue.get()` so it runs as a background thread.
     '''
 
+    # This is the consumer side of the queue. It filters repeated labels so a
+    # held gesture advances the command sequence only once.
     global gesture_queue, last_gesture, active_gesture_chain
 
     while True:
@@ -130,11 +125,8 @@ def check_gesture_queue():
                 # Print valid gestures
                 if last_gesture is None or last_gesture != current_gesture:
                     print(f'detected gesture: {current_gesture}')
-                    if len(active_gesture_chain) < 3:
-                        active_gesture_chain.append(current_gesture)
-                    else:
-                        update_gesture_chain(current_gesture)
-
+                    update_gesture_chain(current_gesture)
+                        
                     last_gesture = current_gesture
 
         except Exception as exc:
@@ -148,6 +140,8 @@ def start_monitoring_gesture_queue():
     is already running, do nothing.
     '''
 
+    # Start one long-lived daemon consumer. The lock prevents duplicate monitor
+    # threads when startup is called more than once.
     global gesture_thread
 
     with gesture_thread_lock:
@@ -159,6 +153,7 @@ def start_monitoring_gesture_queue():
     print('gesture monitor started')
 
 def clear_border(border_state=None):
+    # Reset either the shared fallback border or the state belonging to one hand.
     if border_state is None:
         global border_active, border_center, border_radius, border_crossed
         border_active = False
@@ -171,6 +166,8 @@ def clear_border(border_state=None):
     border_state["center"] = None
     border_state["radius"] = 0
     border_state["crossed"] = False
+    border_state["crossing_point"] = None
+    border_state["crossing_direction"] = None
 
 def draw_border(image, top_landmark, bottom_landmark, border_state=None):
     '''
@@ -178,6 +175,8 @@ def draw_border(image, top_landmark, bottom_landmark, border_state=None):
     the circle will be proportional to the size of the hand
     '''
 
+    # Convert two normalized landmarks into a pixel-space circle, store that
+    # circle in the hand state, and render it on the current frame.
     global border_center, border_radius, border_crossed
 
     if border_state is None:
@@ -211,6 +210,8 @@ def draw_border(image, top_landmark, bottom_landmark, border_state=None):
     border_state["radius"] = int(radius)
     border_state["active"] = True
     border_state["crossed"] = False
+    border_state["crossing_point"] = None
+    border_state["crossing_direction"] = None
 
     border_center = border_state["center"]
     border_radius = border_state["radius"]
@@ -222,16 +223,20 @@ def draw_border(image, top_landmark, bottom_landmark, border_state=None):
     return image
 
 def monitor_border(hand_landmarks, image_shape=None, border_state=None):
-    '''Compare hand landmark positions against the active border circle.
-    Return True if any detected hand landmark is outside the border.
     '''
+    Compare hand landmark positions against the active border circle.
+    Return (True, direction) if a landmark is outside the border, otherwise
+    return (False, None). Direction is relative to the circle epicenter.
+    '''
+    # Test every landmark against the stored circle. A single point outside the
+    # radius ends the active border and reports a crossing to the caller.
     global border_center, border_radius, border_crossed, border_active
 
     if border_state is None:
-        border_state = {"active": border_active, "center": border_center, "radius": border_radius, "crossed": border_crossed}
+        border_state = {"active": border_active, "center": border_center, "radius": border_radius, "crossed": border_crossed, "crossing_point": None, "crossing_direction": None}
 
     if hand_landmarks is None or border_state["center"] is None or border_state["radius"] <= 0:
-        return False
+        return False, None
 
     center_x, center_y = border_state["center"]
     width = image_shape[1] if image_shape is not None else 640
@@ -246,32 +251,70 @@ def monitor_border(hand_landmarks, image_shape=None, border_state=None):
         distance = np.hypot(x - center_x, y - center_y)
 
         if distance >= border_state["radius"]:
+            # Project the outside landmark back onto the circle. This gives the
+            # exact pixel where the center-to-landmark path meets the border.
+            if distance > 0:
+                scale = border_state["radius"] / distance
+                crossing_point = (
+                    int(center_x + (x - center_x) * scale),
+                    int(center_y + (y - center_y) * scale),
+                )
+            else:
+                crossing_point = (center_x, center_y)
+
+            # Image coordinates grow downward, so invert the vertical delta
+            # before converting the vector angle into a compass direction.
+            delta_x = crossing_point[0] - center_x
+            delta_y = center_y - crossing_point[1]
+            angle = (np.degrees(np.arctan2(delta_y, delta_x)) + 360) % 360
+            direction_names = (
+                "right", "up-right", "up", "up-left",
+                "left", "down-left", "down", "down-right",
+            )
+            direction = direction_names[int((angle + 22.5) // 45) % 8]
+
+            border_state["crossing_point"] = crossing_point
+            border_state["crossing_direction"] = direction
             border_state["crossed"] = True
             border_state["active"] = False
             border_crossed = True
             border_active = False
-            return True
+            print(f"border crossed at {crossing_point} ({direction})")
+            return True, direction
 
     border_state["crossed"] = False
+    border_state["crossing_point"] = None
+    border_state["crossing_direction"] = None
     border_crossed = False
-    return False
+    return False, None
 
 def monitor_hand(hand_landmarks, image_shape=None, border_state=None):
-    '''Wrapper used by the visualizer to decide whether the hand crossed the border.'''
-    if monitor_border(hand_landmarks, image_shape, border_state):
+    '''
+    Wrapper used by the visualizer to decide whether the hand crossed the border
+    '''
+
+    # Keep border detection behind one small wrapper so visualization receives a
+    # simple boolean and can decide how to draw the crossed/active state.
+    global activate_border_flag
+
+    crossed, direction = monitor_border(hand_landmarks, image_shape, border_state)
+    if crossed:
         if border_state is not None:
             border_state["crossed"] = True
             border_state["active"] = False
-        print("Hand crossed the border")
-        return True
+        print(f"Hand crossed the border ({direction})")
+        activate_border_flag = False
+        return True, direction
 
     if border_state is not None:
         border_state["crossed"] = False
-    return False
+    return False, None
 
 def visualize(image, detection_result) -> np.ndarray:
     """Draw gesture, handedness, and hand landmarks on a BGR image."""
 
+    # This is the rendering and producer stage: it draws the completed result,
+    # evaluates border movement, and publishes gesture labels to the queue.
     global border_active, gesture_queue
 
     image = image.copy()  # Make a copy so the original frame is not modified.
@@ -331,10 +374,18 @@ def visualize(image, detection_result) -> np.ndarray:
             y = int(landmark.y * image.shape[0])  # Convert the landmark y coordinate to pixel space.
             cv2.circle(image, (x, y), 5, TEXT_COLOR, -1)  # Draw a red filled circle at the landmark.
 
+        if activate_border_flag:
+            # Create the border once when open palm is first detected, then keep it active.
+            if border_state is not None and not border_state["active"]:
+                image = draw_border(image, hand_landmarks[5], hand_landmarks[0], border_state)
+
         if border_state is not None and border_state["active"]:
-            crossed = monitor_hand(hand_landmarks, image.shape, border_state)
+            crossed, crossing_direction = monitor_hand(hand_landmarks, image.shape, border_state) # check if the hand has crossed
             if crossed:
-                cv2.circle(image, border_state["center"], border_state["radius"], (0, 0, 255), 2)
+                cv2.circle(image, border_state["center"], border_state["radius"], (0, 0, 255), 2) 
+                if border_state["crossing_point"] is not None:
+                    cv2.circle(image, border_state["crossing_point"], 7, (255, 0, 255), -1)
+                    cv2.putText(image, crossing_direction, border_state["crossing_point"], cv2.FONT_HERSHEY_PLAIN, FONT_SIZE, (255, 0, 255), FONT_THICKNESS)
             elif border_state["center"] is not None:
                 cv2.circle(image, border_state["center"], border_state["radius"], (0, 255, 0), 2)
         
@@ -352,11 +403,6 @@ def visualize(image, detection_result) -> np.ndarray:
             gesture_queue.put(gesture_label)
 
             '''
-            if gesture_label == "Thumb_Up":
-                dummy_thumbs_up_func()  # Call the dummy test function when a "Thumbs Up" gesture is detected.
-
-            elif gesture_label == "Thumb_Down":
-                dummy_thumbs_down_func()  # Call the dummy thumbs down function when a "Thumbs Down" gesture is detected.
 
             elif gesture_label == 'Open_Palm':
                 # Create the border once when open palm is first detected, then keep it active.
@@ -389,6 +435,8 @@ def visualize(image, detection_result) -> np.ndarray:
 
 def handle_result(result, output_image, timestamp):
     """Store the latest detection result and the image that produced it."""
+    # MediaPipe invokes this callback on its own thread. Only accept the result
+    # belonging to the currently pending frame, then make it visible to the loop.
     global latest_result, latest_frame_bgr, frame_pending, pending_frame_bgr, pending_timestamp
 
     with state_lock:
@@ -402,7 +450,8 @@ def handle_result(result, output_image, timestamp):
         pending_frame_bgr = None
         pending_timestamp = None
 
-# Create the base options for the MediaPipe detector using the model file
+# Configure the MediaPipe recognizer and tell it to deliver live results through
+# handle_result instead of blocking the camera loop.
 base_options = python.BaseOptions(
     model_asset_path='C:/Users/black/Coding/testing/handsfree/mediapipe_hand-tflite-float/gesture_recognizer.task'
 )
@@ -414,16 +463,19 @@ options = vision.GestureRecognizerOptions(
     result_callback=handle_result,  # Tell MediaPipe to call this function when results arrive
 )
 
+# Start consuming gesture labels before frames begin producing them.
 start_monitoring_gesture_queue()
 
-# Create the detector object from the configured options
+# The context manager closes MediaPipe resources when the camera loop exits.
 with vision.GestureRecognizer.create_from_options(options) as detector:
     cap = cv2.VideoCapture(0)  # Open the default webcam
 
     if not cap.isOpened():  # Check whether the camera opened successfully
         raise RuntimeError("Cannot open camera")
 
-    while True:  # Keep reading frames until the user quits
+    # Main producer/display loop: capture a frame, submit at most one pending
+    # request, and display the newest completed detection without blocking.
+    while True:
         ret, frame = cap.read()  # Read one frame from the camera
         if not ret:  # Stop if no frame could be read
             print("Can't receive frame (stream end?). Exiting ...")
@@ -435,7 +487,8 @@ with vision.GestureRecognizer.create_from_options(options) as detector:
         frame_timestamp = int(cv2.getTickCount() / cv2.getTickFrequency() * 1000)  # Create a timestamp in milliseconds
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)  # Wrap the frame as a MediaPipe image
 
-        # If no request is currently pending, send the frame to the detector for async processing
+        # Submit only one frame at a time. The callback clears frame_pending when
+        # MediaPipe finishes, preventing requests from growing faster than results.
         with state_lock:
             if not frame_pending:
                 pending_frame_bgr = frame.copy()
@@ -446,7 +499,9 @@ with vision.GestureRecognizer.create_from_options(options) as detector:
             current_result = latest_result
             current_frame_bgr = latest_frame_bgr
 
-        if current_result is not None and current_frame_bgr is not None:  # If a callback result is ready, show it
+        # Display the annotated callback frame when available; otherwise keep the
+        # camera feed responsive while the first asynchronous result is pending.
+        if current_result is not None and current_frame_bgr is not None:
             annotated_frame = visualize(current_frame_bgr, current_result)  # Draw boxes on the latest callback frame
             cv2.imshow("Hand Detection", annotated_frame)  # Display the annotated frame
         else:  # If no result has arrived yet, just show the raw camera frame
