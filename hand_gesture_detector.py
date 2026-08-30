@@ -31,8 +31,26 @@ state_lock = threading.Lock()  # Protect shared callback state
 # another while the visualizer processes a detection result.
 left_hand_state = {"gesture": "Unknown", "active": False}
 right_hand_state = {"gesture": "Unknown", "active": False}
-left_border_state = {"active": False, "center": None, "radius": 0, "crossed": False, "crossing_point": None, "crossing_direction": None}
-right_border_state = {"active": False, "center": None, "radius": 0, "crossed": False, "crossing_point": None, "crossing_direction": None}
+left_border_state = {
+    "active": False,
+    "center": None,
+    "radius": 0,
+    "outer_center": None,
+    "outer_radius": 0,
+    "crossed": False,
+    "crossing_point": None,
+    "crossing_direction": None,
+}
+right_border_state = {
+    "active": False,
+    "center": None,
+    "radius": 0,
+    "outer_center": None,
+    "outer_radius": 0,
+    "crossed": False,
+    "crossing_point": None,
+    "crossing_direction": None,
+}
 
 # The gesture-monitoring thread sets this flag; the visualizer consumes it on a
 # later frame, where it has the landmarks and image needed to draw the border.
@@ -41,6 +59,9 @@ border_active = False
 border_center = None
 border_radius = 0
 border_crossed = False
+outer_border_crossed = False
+outer_border_center = None
+outer_border_radius = 0
 
 # Gesture labels travel from visualize() to this queue, then are consumed by a
 # daemon thread that recognizes ordered gesture sequences.
@@ -155,16 +176,21 @@ def start_monitoring_gesture_queue():
 def clear_border(border_state=None):
     # Reset either the shared fallback border or the state belonging to one hand.
     if border_state is None:
-        global border_active, border_center, border_radius, border_crossed
+        global border_active, border_center, border_radius, border_crossed, outer_border_crossed, outer_border_center, outer_border_radius
         border_active = False
         border_center = None
         border_radius = 0
         border_crossed = False
+        outer_border_crossed = False
+        outer_border_center = None
+        outer_border_radius = 0
         return
 
     border_state["active"] = False
     border_state["center"] = None
     border_state["radius"] = 0
+    border_state["outer_center"] = None
+    border_state["outer_radius"] = 0
     border_state["crossed"] = False
     border_state["crossing_point"] = None
     border_state["crossing_direction"] = None
@@ -177,10 +203,19 @@ def draw_border(image, top_landmark, bottom_landmark, border_state=None):
 
     # Convert two normalized landmarks into a pixel-space circle, store that
     # circle in the hand state, and render it on the current frame.
-    global border_center, border_radius, border_crossed
+    global border_center, border_radius, border_crossed, outer_border_crossed, outer_border_center, outer_border_radius
 
     if border_state is None:
-        border_state = {"active": False, "center": None, "radius": 0, "crossed": False}
+        border_state = {
+            "active": False,
+            "center": None,
+            "radius": 0,
+            "outer_center": None,
+            "outer_radius": 0,
+            "crossed": False,
+            "crossing_point": None,
+            "crossing_direction": None,
+        }
 
     if image is None or top_landmark is None or bottom_landmark is None:
         return image
@@ -200,14 +235,20 @@ def draw_border(image, top_landmark, bottom_landmark, border_state=None):
     dy_px = (bottom_y - top_y) * image.shape[0]
     distance_px = np.hypot(dx_px, dy_px)
 
-    # Midpoint between the wrist and index MCP points serves as the circle center.
+    # Midpoint between the hand points serves as the circle center.
     center_x = ((top_x + bottom_x) / 2.0) * image.shape[1]
     center_y = ((top_y + bottom_y) / 2.0) * image.shape[0]
 
-    # Radius scales with the hand size and is kept at a sensible minimum.
-    radius = max(25, distance_px * 1.5)
-    border_state["center"] = (int(center_x), int(center_y))
-    border_state["radius"] = int(radius)
+    # The inner ring is the visible border. The outer ring is the trigger for
+    # clearing the border once a hand has actually crossed it.
+    inner_radius = max(25, distance_px * 1.75)
+    outer_radius = int(max(25, distance_px * 3))
+    center = (int(center_x), int(center_y))
+
+    border_state["center"] = center
+    border_state["radius"] = int(inner_radius)
+    border_state["outer_center"] = center
+    border_state["outer_radius"] = outer_radius
     border_state["active"] = True
     border_state["crossed"] = False
     border_state["crossing_point"] = None
@@ -215,32 +256,57 @@ def draw_border(image, top_landmark, bottom_landmark, border_state=None):
 
     border_center = border_state["center"]
     border_radius = border_state["radius"]
+    outer_border_center = border_state["outer_center"]
+    outer_border_radius = border_state["outer_radius"]
     border_crossed = border_state["crossed"]
+    outer_border_crossed = False
 
     border_color = (0, 0, 255) if border_state["crossed"] else (0, 255, 0)
     cv2.circle(image, border_state["center"], border_state["radius"], border_color, 2)
-
+    cv2.circle(image, border_state["outer_center"], border_state["outer_radius"], (255, 255, 0), 1)
+    
     return image
 
 def monitor_border(hand_landmarks, image_shape=None, border_state=None):
     '''
-    Compare hand landmark positions against the active border circle.
-    Return (True, direction) if a landmark is outside the border, otherwise
-    return (False, None). Direction is relative to the circle epicenter.
+    Compare hand landmark positions against the active inner border.
+    Return (False, direction) when any landmark extends outside the border,
+    otherwise return (False, None).
     '''
-    # Test every landmark against the stored circle. A single point outside the
-    # radius ends the active border and reports a crossing to the caller.
-    global border_center, border_radius, border_crossed, border_active
+    # Use the shared border globals as a fallback when no hand-specific state was supplied.
+    global border_center, border_radius, border_crossed, border_active, outer_border_crossed, outer_border_center, outer_border_radius
 
+    # Build a border state object if the caller did not provide one.
     if border_state is None:
-        border_state = {"active": border_active, "center": border_center, "radius": border_radius, "crossed": border_crossed, "crossing_point": None, "crossing_direction": None}
+        border_state = {
+            "active": border_active,
+            "center": border_center,
+            "radius": border_radius,
+            "outer_center": outer_border_center,
+            "outer_radius": outer_border_radius,
+            "crossed": border_crossed,
+            "crossing_point": None,
+            "crossing_direction": None,
+        }
 
-    if hand_landmarks is None or border_state["center"] is None or border_state["radius"] <= 0:
+    # Prefer the inner ring for the visible radius, but the outer ring is the actual clear condition.
+    check_center = border_state.get("center")
+    check_radius = border_state.get("radius")
+    check_outer_radius = border_state.get("outer_radius")
+
+    # If there is no border to compare against, stop immediately.
+    if hand_landmarks is None or check_center is None or check_radius <= 0:
         return False, None
 
-    center_x, center_y = border_state["center"]
+    # Convert the border center and the landmark coordinates into image pixels.
+    center_x, center_y = check_center
     width = image_shape[1] if image_shape is not None else 640
     height = image_shape[0] if image_shape is not None else 480
+
+    # Track whether any landmark is outside the visual cue and whether any landmark has crossed the clear zone.
+    found_outside_inner = False
+    direction = None
+    crossing_point = None
 
     for landmark in hand_landmarks:
         if landmark is None:
@@ -250,11 +316,12 @@ def monitor_border(hand_landmarks, image_shape=None, border_state=None):
         y = int(landmark.y * height)
         distance = np.hypot(x - center_x, y - center_y)
 
-        if distance >= border_state["radius"]:
-            # Project the outside landmark back onto the circle. This gives the
-            # exact pixel where the center-to-landmark path meets the border.
+        # If the landmark is beyond the visible circle, compute its direction as a warning signal.
+        if distance >= check_radius:
+            found_outside_inner = True
+
             if distance > 0:
-                scale = border_state["radius"] / distance
+                scale = check_radius / distance
                 crossing_point = (
                     int(center_x + (x - center_x) * scale),
                     int(center_y + (y - center_y) * scale),
@@ -262,8 +329,6 @@ def monitor_border(hand_landmarks, image_shape=None, border_state=None):
             else:
                 crossing_point = (center_x, center_y)
 
-            # Image coordinates grow downward, so invert the vertical delta
-            # before converting the vector angle into a compass direction.
             delta_x = crossing_point[0] - center_x
             delta_y = center_y - crossing_point[1]
             angle = (np.degrees(np.arctan2(delta_y, delta_x)) + 360) % 360
@@ -273,19 +338,34 @@ def monitor_border(hand_landmarks, image_shape=None, border_state=None):
             )
             direction = direction_names[int((angle + 22.5) // 45) % 8]
 
-            border_state["crossing_point"] = crossing_point
-            border_state["crossing_direction"] = direction
-            border_state["crossed"] = True
-            border_state["active"] = False
-            border_crossed = True
-            border_active = False
-            print(f"border crossed at {crossing_point} ({direction})")
-            return True, direction
+            # If the landmark is also beyond the outer ring, clear the border and stop monitoring.
+            if check_outer_radius is not None and distance >= check_outer_radius:
+                border_state["crossing_point"] = crossing_point
+                border_state["crossing_direction"] = direction
+                border_state["crossed"] = True
+                border_state["active"] = False
+                border_crossed = True
+                border_active = False
+                outer_border_crossed = True
+                return True, direction
 
+    # If the hand is outside the inner ring but not yet past the outer ring, keep the border active.
+    if found_outside_inner:
+        border_state["crossing_point"] = crossing_point
+        border_state["crossing_direction"] = direction
+        border_state["crossed"] = False
+        border_state["active"] = True
+        border_crossed = False
+        border_active = True
+        outer_border_crossed = False
+        return False, direction
+
+    # No landmark crossed the inner border, so clear the directional state and leave the border active.
     border_state["crossed"] = False
     border_state["crossing_point"] = None
     border_state["crossing_direction"] = None
     border_crossed = False
+    outer_border_crossed = False
     return False, None
 
 def monitor_hand(hand_landmarks, image_shape=None, border_state=None):
@@ -305,6 +385,10 @@ def monitor_hand(hand_landmarks, image_shape=None, border_state=None):
         print(f"Hand crossed the border ({direction})")
         activate_border_flag = False
         return True, direction
+    elif direction:
+        print(f"Hand crossed the border ({direction})")
+        return False, direction
+
 
     if border_state is not None:
         border_state["crossed"] = False
@@ -380,15 +464,16 @@ def visualize(image, detection_result) -> np.ndarray:
                 image = draw_border(image, hand_landmarks[5], hand_landmarks[0], border_state)
 
         if border_state is not None and border_state["active"]:
-            crossed, crossing_direction = monitor_hand(hand_landmarks, image.shape, border_state) # check if the hand has crossed
+            crossed, crossing_direction = monitor_hand(hand_landmarks, image.shape, border_state)  # check if the hand has crossed the outer ring
             if crossed:
-                cv2.circle(image, border_state["center"], border_state["radius"], (0, 0, 255), 2) 
+                cv2.circle(image, border_state["center"], border_state["radius"], (0, 0, 255), 2)
+                cv2.circle(image, border_state["outer_center"], border_state["outer_radius"], (0, 0, 255), 1)
                 if border_state["crossing_point"] is not None:
                     cv2.circle(image, border_state["crossing_point"], 7, (255, 0, 255), -1)
                     cv2.putText(image, crossing_direction, border_state["crossing_point"], cv2.FONT_HERSHEY_PLAIN, FONT_SIZE, (255, 0, 255), FONT_THICKNESS)
             elif border_state["center"] is not None:
                 cv2.circle(image, border_state["center"], border_state["radius"], (0, 255, 0), 2)
-        
+                cv2.circle(image, border_state["outer_center"], border_state["outer_radius"], (255, 255, 0), 1)
         # Set a default gesture label in case no gesture is detected.
         gesture_label = "Unknown"
         if hand_index < len(detection_result.gestures):  # Check whether gesture data exists for this hand.
