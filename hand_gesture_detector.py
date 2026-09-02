@@ -17,8 +17,6 @@ class HandGestureDetector:
     FONT_THICKNESS = 1
     TEXT_COLOR = (255, 0, 0)
 
-    
-
     def __init__(self, model_path='C:/Users/black/Coding/testing/handsfree/mediapipe_hand-tflite-float/gesture_recognizer.task'):
         # MediaPipe returns results asynchronously. These attributes let the camera loop
         # safely pair the newest result with the frame that produced it.
