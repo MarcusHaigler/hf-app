@@ -5,7 +5,7 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 import queue
-from dummy_cmds import *
+from assets.control_manager import Control_Manager
 
 class HandGestureDetector:
     """Encapsulates the gesture recognizer, gesture queue, and border logic."""
@@ -63,25 +63,6 @@ class HandGestureDetector:
         self.outer_border_center = None
         self.outer_border_radius = 0
 
-        # Gesture labels travel from visualize() to this queue, then are consumed by a
-        # daemon thread that recognizes ordered gesture sequences.
-        self.gesture_thread = None
-        self.gesture_thread_lock = threading.Lock()
-        self.gesture_queue = queue.Queue()
-        self.last_gesture = None
-
-        # The newest gesture is stored at index 0. Older gestures shift toward index 2,
-        # allowing the mapping below to match a three-gesture command sequence.
-        self.a = None
-        self.b = None
-        self.c = None
-        self.active_gesture_chain = [self.a, self.b, self.c]
-
-        # Map a recognized gesture sequence to the action it should trigger.
-        self.neutral_state_mapping = {
-            (("Open_Palm", None), ("Closed_Fist", None), ("Open_Palm", None)): self.activate_zborder,
-        }
-
         self.base_options = python.BaseOptions(model_asset_path=model_path)
         self.options = vision.GestureRecognizerOptions(
             base_options=self.base_options,
@@ -89,60 +70,7 @@ class HandGestureDetector:
             result_callback=self.handle_result,
         )
 
-        self.start_monitoring_gesture_queue()
-
-    def activate_border(self):
-        """Request that the border be drawn on the next frame where landmarks are available."""
-        with self.state_lock:
-            if not self.activate_border_flag:
-                self.activate_border_flag = True
-
-    def update_gesture_chain(self, new_val):
-        """Shift the existing gestures and execute the matching action if a sequence is complete."""
-        self.c = self.b
-        self.b = self.a
-        self.a = new_val
-        self.active_gesture_chain[:] = [self.a, self.b, self.c]
-
-        print(f'active gesture chain updated: {self.active_gesture_chain}')
-
-        action = self.neutral_state_mapping.get(tuple(self.active_gesture_chain))
-        if action is not None:
-            action()
-            print('action triggered')
-
-    def check_gesture_queue(self):
-        """Continuously monitor the gesture queue and update the gesture sequence when new labels arrive."""
-        while True:
-            try:
-                current_gesture, current_crossing_direction = self.gesture_queue.get()
-                if current_gesture == 'None':
-                    continue
-                elif current_crossing_direction:
-                    # pass the direction to the currently active control mode
-                    pass
-
-                if current_gesture is None:
-                    break
-
-                if self.last_gesture is None or self.last_gesture != current_gesture:
-                    print(f'detected gesture: {current_gesture}')
-                    self.update_gesture_chain(current_gesture, current_crossing_direction)
-                    self.last_gesture = current_gesture
-
-            except Exception as exc:
-                print('gesture monitor error:', exc)
-                continue
-
-    def start_monitoring_gesture_queue(self):
-        """Start a background daemon thread to monitor the gesture queue."""
-        with self.gesture_thread_lock:
-            if self.gesture_thread is not None and getattr(self.gesture_thread, 'is_alive', lambda: False)():
-                return
-            self.gesture_thread = threading.Thread(target=self.check_gesture_queue, daemon=True)
-            self.gesture_thread.start()
-
-        print('gesture monitor started')
+        self.backend_controls = Control_Manager()
 
     def clear_border(self, border_state=None):
         """Reset either the shared fallback border or the state belonging to one hand."""
@@ -407,7 +335,7 @@ class HandGestureDetector:
 
                 hand_state["gesture"] = gesture_label
                 hand_state["active"] = True
-                self.gesture_queue.put(gesture_label, possible_crossing_direction) # pass the gesture and crossing direction for later processing
+                self.backend_controls.submit(gesture_label, possible_crossing_direction)
 
             text_y = 30 + hand_index * 40
             cv2.putText(
