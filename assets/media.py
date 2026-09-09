@@ -1,4 +1,4 @@
-from assets.control_manager import ControlHelper
+from .control_helper import ControlHelper
 
 class MediaMode(ControlHelper):
 

@@ -1,8 +1,11 @@
-from assets.control_manager import ControlHelper
+from .control_helper import ControlHelper
 
 class NeutralMode(ControlHelper):
 
-    def __init__(self):
+    def __init__(self, target_flag=None, lock=None):
+
+        super().__init__(target_flag, lock)
+
         self.last_gesture = None
 
         # The newest gesture is stored at index 0. Older gestures shift toward index 2,
@@ -28,9 +31,10 @@ class NeutralMode(ControlHelper):
         if self.last_gesture is None or self.last_gesture != gesture:
             self.update_gesture_chain(gesture, direction)
             self.last_gesture = gesture
+            print('updated gesture chain:', self.active_gesture_chain)
 
-        # compare the gesture chain to the mapping and execute the corresponding action if it exists
-        self.check_mapping(self.active_gesture_chain, self.neutral_state_mapping)
+            # compare the gesture chain to the mapping and execute the corresponding action if it exists
+            self.check_mapping(self.active_gesture_chain, self.neutral_state_mapping)
 
     def update_gesture_chain(self, new_val, direction=None):
         """

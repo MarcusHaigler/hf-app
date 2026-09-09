@@ -4,7 +4,7 @@ import numpy as np
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-import queue
+from multiprocessing import Lock, Value
 from assets.control_manager import Control_Manager
 
 class HandGestureDetector:
@@ -25,7 +25,7 @@ class HandGestureDetector:
         self.frame_pending = False
         self.pending_frame_bgr = None
         self.pending_timestamp = None
-        self.state_lock = threading.Lock()
+        self.state_lock = Lock()
 
         # Each hand owns its gesture and border state so two hands do not overwrite one
         # another while the visualizer processes a detection result.
@@ -54,7 +54,9 @@ class HandGestureDetector:
 
         # The gesture-monitoring thread sets this flag; the visualizer consumes it on a
         # later frame, where it has the landmarks and image needed to draw the border.
-        self.activate_border_flag = False
+        # Use a shared multiprocessing-backed value so the control helper can update the
+        # detector's live flag from the spawned worker process.
+        self.activate_border_flag = Value('b', False)
         self.border_active = False
         self.border_center = None
         self.border_radius = 0
@@ -70,7 +72,8 @@ class HandGestureDetector:
             result_callback=self.handle_result,
         )
 
-        self.backend_controls = Control_Manager()
+        self.backend_controls = Control_Manager(self.activate_border_flag, self.state_lock)
+        self.backend_controls.start()  # Start the control monitor process to handle gestures and mode switching.
 
     def clear_border(self, border_state=None):
         """Reset either the shared fallback border or the state belonging to one hand."""
@@ -243,10 +246,19 @@ class HandGestureDetector:
         crossed, direction = self.monitor_border(hand_landmarks, image_shape, border_state)
         if crossed:
             if border_state is not None:
+                self.clear_border(border_state)
                 border_state["crossed"] = True
-                border_state["active"] = False
+
+            self.border_active = False
+            self.border_center = None
+            self.border_radius = 0
+            self.outer_border_center = None
+            self.outer_border_radius = 0
+            self.border_crossed = True
+            self.outer_border_crossed = True
+
             print(f"Hand crossed the border ({direction})")
-            self.activate_border_flag = False
+            self.activate_border_flag.value = False
             return True, direction
         elif direction:
             print(f"Hand crossed the border ({direction})")
@@ -308,7 +320,7 @@ class HandGestureDetector:
                 y = int(landmark.y * image.shape[0])
                 cv2.circle(image, (x, y), 5, self.TEXT_COLOR, -1)
 
-            if self.activate_border_flag:
+            if self.activate_border_flag.value:
                 if border_state is not None and not border_state["active"]:
                     image = self.draw_border(image, hand_landmarks[5], hand_landmarks[0], border_state)
 
