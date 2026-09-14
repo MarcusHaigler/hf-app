@@ -34,6 +34,7 @@ class ControlHelper:
         set the current control mode to neutral
         '''
         # This helper currently acts as a no-op placeholder for neutral mode activation.
+        print('neutral mode test success')
         return True
 
     def activate_border(self):
@@ -72,9 +73,6 @@ class ControlHelper:
         action = mapping.get(tuple(value))
         # If a matching callback exists, call it and return success.
         if action is not None:
-            action()
-            print('action triggered')
-            return True
+            return action
         # If no mapping entry exists, report that nothing happened.
-        print('no action found')
         return False

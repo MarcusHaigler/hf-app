@@ -1,5 +1,6 @@
 import multiprocessing as mp
 from .neutral import NeutralMode
+# from.cursor import CursorMode
 
 class Control_Manager:
     '''
@@ -18,6 +19,7 @@ class Control_Manager:
 
         self.active_control_mappings = {
             'neutral' :self.neutral_mode.neutral_consumer,
+#            'cursor' : self.cursor_mode.cursor_consumer
         }
 
         self.incoming_queue = mp.Queue() # Create a message queue used to send commands to the worker process.
@@ -58,12 +60,12 @@ class Control_Manager:
 
                 # Handle an incoming gesture only when a mode is already active.
                 elif command == "gesture" and self.active_control_mode is not None:
-                    gesture, crossing_direction = message[1] # unpack values 
-                    self.active_control_mappings[self.active_control_mode](gesture, crossing_direction) # Pass the gesture to the currently active control mode for processing.
+                    gesture, crossing_direction, border_flag = message[1] # unpack values 
+                    self.active_control_mappings[self.active_control_mode](gesture, crossing_direction, border_flag) # Pass the gesture to the currently active control mode for processing.
                     
             except Exception as exc:
                 # Capture any exception and send a string form back out of the worker.
-                print(("error", repr(exc)))
+                print(f"error: {repr(exc)}")
 
     def set_mode(self, control_mode):
         """
@@ -77,11 +79,11 @@ class Control_Manager:
 
         self.incoming_queue.put(("set_mode", control_mode))
 
-    def submit(self, gesture, crossing_direction=None):
+    def submit(self, gesture, crossing_direction=None, border_flag=False):
         """
         Queue one gesture event without blocking the caller
         """
-        self.incoming_queue.put(("gesture", (gesture, crossing_direction)))
+        self.incoming_queue.put(("gesture", (gesture, crossing_direction, border_flag)))
 
     def close(self):
         """Stop the worker and release its queue resources."""

@@ -347,7 +347,7 @@ class HandGestureDetector:
 
                 hand_state["gesture"] = gesture_label
                 hand_state["active"] = True
-                self.backend_controls.submit(gesture_label, possible_crossing_direction)
+                self.backend_controls.submit(gesture_label, possible_crossing_direction, self.border_active)
 
             text_y = 30 + hand_index * 40
             cv2.putText(

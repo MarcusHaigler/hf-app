@@ -18,9 +18,10 @@ class NeutralMode(ControlHelper):
         # Map a recognized gesture sequence to the action it should trigger.
         self.neutral_state_mapping = {
             (("Open_Palm", None), ("Closed_Fist", None), ("Open_Palm", None)): self.activate_border,
+
         }
 
-    def neutral_consumer(self, gesture, direction=None):
+    def neutral_consumer(self, gesture, direction=None, border_flag=False):
         '''
         process incoming data and take action if a gesture sequence is complete
         '''
@@ -34,7 +35,10 @@ class NeutralMode(ControlHelper):
             print('updated gesture chain:', self.active_gesture_chain)
 
             # compare the gesture chain to the mapping and execute the corresponding action if it exists
-            self.check_mapping(self.active_gesture_chain, self.neutral_state_mapping)
+            
+            action = self.check_mapping(self.active_gesture_chain, self.neutral_state_mapping)
+            if action != None:
+                action()
 
     def update_gesture_chain(self, new_val, direction=None):
         """
@@ -46,3 +50,19 @@ class NeutralMode(ControlHelper):
         self.a = (new_val, direction)
         self.active_gesture_chain[:] = [self.a, self.b, self.c]
 
+    def activate_cursor_mode(self):
+        '''
+        activate the control mode
+
+        prolly have to use a set_mode call
+        '''
+
+        pass
+
+    def activate_media_mode(self):
+        '''
+        activate the media mode
+
+        prolly have to use a set_mode call
+        '''
+        pass
