@@ -5,10 +5,21 @@ class ControlHelper:
     reusable functions that can be used by multiple control classes
     '''
 
-    def __init__(self, target_flag=None, lock=None):
+    def __init__(self, target_flag=None, lock=None, target_queue=None):
         # used by the lower level control classes to safely update the target_flag in a thread-safe manner
         self.control_target_lock = lock
         self.control_target_flag = target_flag
+        self.target_queue = target_queue
+
+    def set_mode(self, val):
+        """
+        send a command to the worker process to set the active control mode
+        - really only used by the neutral controls
+        """
+
+        # Queue a command telling the worker to replace the active control mode.
+    
+        self.target_queue.put(("set_mode", val))
 
     def _get_target_flag(self):
         """Return the current flag value whether it is a plain bool or a multiprocessing Value."""
@@ -33,10 +44,8 @@ class ControlHelper:
         reset the currently active controls variables, and
         set the current control mode to neutral
         '''
-        # This helper currently acts as a no-op placeholder for neutral mode activation.
-        print('neutral mode test success')
-        return True
-
+        self.target_queue.put(("set_mode", 'neutral'))
+        
     def activate_border(self):
         '''
         change the target_flag to True using a lock to prevent race conditions.
@@ -72,7 +81,7 @@ class ControlHelper:
         # Convert the incoming value into the tuple key used by the mapping.
         action = mapping.get(tuple(value))
         # If a matching callback exists, call it and return success.
-        if action is not None:
+        if action is not False:
             return action
         # If no mapping entry exists, report that nothing happened.
         return False

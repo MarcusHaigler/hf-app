@@ -257,11 +257,12 @@ class HandGestureDetector:
             self.border_crossed = True
             self.outer_border_crossed = True
 
-            print(f"Hand crossed the border ({direction})")
+            # if hand crosses outer border 
             self.activate_border_flag.value = False
             return True, direction
+
+        # if hand crosses inner border 
         elif direction:
-            print(f"Hand crossed the border ({direction})")
             return False, direction
 
         if border_state is not None:
@@ -327,6 +328,7 @@ class HandGestureDetector:
             possible_crossing_direction = None # store the crossing direction for later
             if border_state is not None and border_state["active"]:
                 crossed, crossing_direction = self.monitor_hand(hand_landmarks, image.shape, border_state)
+                possible_crossing_direction = crossing_direction
                 if crossed:
                     possible_crossing_direction = crossing_direction
                     cv2.circle(image, border_state["center"], border_state["radius"], (0, 0, 255), 2)
@@ -387,6 +389,10 @@ class HandGestureDetector:
         """Open the camera, process frames, and display the annotated output."""
         with vision.GestureRecognizer.create_from_options(self.options) as detector:
             cap = cv2.VideoCapture(0)
+
+            #window_name = 'hands free cursor'
+            #cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+            #cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
             if not cap.isOpened():
                 raise RuntimeError("Cannot open camera")

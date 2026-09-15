@@ -1,21 +1,14 @@
 from .control_helper import ControlHelper
 from pynput import mouse
-import queue
 
 class CursorMode(ControlHelper):
     '''
     functions for controlling the mouse cursor
     '''
 
-    def __init__(self):
+    def __init__(self, target_flag=None, lock=None, target_queue=None):
 
-        super().__init__()
-
-        self.active_cursor_mapping  = {
-
-        }
-
-        self.cursor_job_queue = queue.Queue()
+        super().__init__(target_flag, lock,target_queue)
 
         self.a = None
         self.b = None
@@ -23,7 +16,7 @@ class CursorMode(ControlHelper):
 
         self.cursor_gesture_sequence_mappings = {
             (('Open_Palm', None), ('Closed_Fist', None)) : self.activate_border,
-            (('Open_Palm', None), ('Closed_Fist', None)) : self.activate_neutral_control_mode
+            (('Open_Palm', None), ('Pointing_Up', None)) : self.activate_neutral_control_mode
         }
 
         self.active_cursor_mapping = {
@@ -58,14 +51,14 @@ class CursorMode(ControlHelper):
         '''
         function to perform a right click
         '''
-        mouse.Controller().click(mouse.Button.right, 1)
+        #mouse.Controller().click(mouse.Button.right, 1)
         print('right click called')
 
     def left_click(self):
         '''
         function to perform a left click
         '''
-        mouse.Controller().click(mouse.Button.left, 1)
+        #mouse.Controller().click(mouse.Button.left, 1)
         print('left click called')
 
     def update_cursor_sequence(self, val):
@@ -96,8 +89,8 @@ class CursorMode(ControlHelper):
             
         mouse.Controller().position = (x, y)
         '''
+        if direction == None:
+            return
 
-        print(f'test mouse moving in {direction}')
-        
-
+        print(f'mouse moving in {direction}')
         

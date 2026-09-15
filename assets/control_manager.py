@@ -1,6 +1,6 @@
 import multiprocessing as mp
 from .neutral import NeutralMode
-# from.cursor import CursorMode
+from.cursor import CursorMode
 
 class Control_Manager:
     '''
@@ -13,23 +13,24 @@ class Control_Manager:
         # used by the lower level control classes to safely update the target_flag in a thread-safe manner
         self.control_target_lock = lock
         self.control_target_flag = target_flag
+        self.incoming_queue = mp.Queue() # Create a message queue used to send commands to the worker process.
+        
 
         # create control class objects here
-        self.neutral_mode = NeutralMode(self.control_target_flag, self.control_target_lock)
+        self.neutral_mode = NeutralMode(self.control_target_flag, self.control_target_lock, self.incoming_queue)
+        self.cursor_mode = CursorMode(self.control_target_flag, self.control_target_lock, self.incoming_queue)
 
         self.active_control_mappings = {
             'neutral' :self.neutral_mode.neutral_consumer,
-#            'cursor' : self.cursor_mode.cursor_consumer
+            'cursor' : self.cursor_mode.cursor_consumer
         }
 
-        self.incoming_queue = mp.Queue() # Create a message queue used to send commands to the worker process.
         self.active_control_mode = 'neutral' # the currently selected control mode
 
     def start(self):
          # Start a separate process that owns the control mode state and executes commands.
         self.control_monitor_process = mp.Process(
             target=self.monitor_incoming_queue,
-
             daemon=True,
         )
 
@@ -56,7 +57,12 @@ class Control_Manager:
             try:
                 # to set the active control mode
                 if command == "set_mode":
-                    self.active_control_mode = message[1]
+                    new_mode = message[1]
+                    if new_mode not in self.active_control_mappings:
+                        raise ValueError(f"Invalid control mode: {new_mode}. Valid modes are: {list(self.active_control_mappings.keys())}")
+                    else:
+                        self.active_control_mode = new_mode
+                        print(f'control mode set to {self.active_control_mode}')
 
                 # Handle an incoming gesture only when a mode is already active.
                 elif command == "gesture" and self.active_control_mode is not None:
@@ -66,18 +72,6 @@ class Control_Manager:
             except Exception as exc:
                 # Capture any exception and send a string form back out of the worker.
                 print(f"error: {repr(exc)}")
-
-    def set_mode(self, control_mode):
-        """
-        send a command to the worker process to set the active control mode
-        """
-
-        # Queue a command telling the worker to replace the active control mode.
-
-        if control_mode not in self.active_control_mappings:
-            raise ValueError(f"Invalid control mode: {control_mode}. Valid modes are: {list(self.active_control_mappings.keys())}")
-
-        self.incoming_queue.put(("set_mode", control_mode))
 
     def submit(self, gesture, crossing_direction=None, border_flag=False):
         """
