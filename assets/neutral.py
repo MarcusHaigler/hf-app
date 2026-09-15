@@ -15,11 +15,10 @@ class NeutralMode(ControlHelper):
         self.c = None
         self.active_gesture_chain = [self.a, self.b, self.c]
 
-        # Map a recognized gesture sequence to the action it should trigger.
-        # read from right to left (new values are added to the front)
+        # map a recognized gesture sequence to the action it should trigger
         self.neutral_state_mapping = {
             (("Open_Palm", None), ("Closed_Fist", None), ("Open_Palm", None)): self.activate_border,
-            (('Closed_Fist', 'up'), ('Closed_Fist', None), ('Open_Palm', None)) : self.activate_cursor_mode
+            (('Open_Palm', None), ('Closed_Fist', None), ('Closed_Fist', 'up')) : self.activate_cursor_mode
         }
 
     def dummy_call(self):
@@ -37,7 +36,7 @@ class NeutralMode(ControlHelper):
             return None
 
         # update the gesture chain as long as its fresh data
-        if (gesture, direction) == (None, None) or self.last_message != (gesture, direction):
+        if self.last_message != (gesture, direction):
             self.update_gesture_chain(gesture, direction)
             self.last_message = gesture, direction
             print('updated gesture chain:', self.active_gesture_chain)
@@ -52,9 +51,9 @@ class NeutralMode(ControlHelper):
         Shift the existing gestures
         """
 
-        self.c = self.b
-        self.b = self.a
-        self.a = (new_val, direction)
+        self.a = self.b
+        self.b = self.c
+        self.c = (new_val, direction)
         self.active_gesture_chain[:] = [self.a, self.b, self.c]
 
     def activate_cursor_mode(self):
