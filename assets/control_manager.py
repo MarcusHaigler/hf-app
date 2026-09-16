@@ -1,6 +1,17 @@
 import multiprocessing as mp
 from .neutral import NeutralMode
 from.cursor import CursorMode
+from ctypes import c_int
+
+
+NEUTRAL_MODE = 0
+CURSOR_MODE = 1
+MODE_IDS = {
+    'neutral': NEUTRAL_MODE,
+    'cursor': CURSOR_MODE,
+}
+MODE_NAMES = {mode_id: name for name, mode_id in MODE_IDS.items()}
+
 
 class Control_Manager:
     '''
@@ -25,7 +36,11 @@ class Control_Manager:
             'cursor' : self.cursor_mode.cursor_consumer
         }
 
-        self.active_control_mode = 'neutral' # the currently selected control mode
+        self.active_control_mode = mp.Value(c_int, NEUTRAL_MODE)
+
+    def active_mode_name(self):
+        """Return the active mode name from the shared mode value."""
+        return MODE_NAMES[self.active_control_mode.value]
 
     def start(self):
          # Start a separate process that owns the control mode state and executes commands.
@@ -61,13 +76,14 @@ class Control_Manager:
                     if new_mode not in self.active_control_mappings:
                         raise ValueError(f"Invalid control mode: {new_mode}. Valid modes are: {list(self.active_control_mappings.keys())}")
                     else:
-                        self.active_control_mode = new_mode
-                        print(f'control mode set to {self.active_control_mode}')
+                        self.active_control_mode.value = MODE_IDS[new_mode]
+                        print(f'control mode set to {new_mode}')
 
                 # Handle an incoming gesture only when a mode is already active.
-                elif command == "gesture" and self.active_control_mode is not None:
+                elif command == "gesture":
                     gesture, crossing_direction, border_flag = message[1] # unpack values 
-                    self.active_control_mappings[self.active_control_mode](gesture, crossing_direction, border_flag) # Pass the gesture to the currently active control mode for processing.
+                    mode = MODE_NAMES[self.active_control_mode.value]
+                    self.active_control_mappings[mode](gesture, crossing_direction, border_flag) # Pass the gesture to the currently active control mode for processing.
                     
             except Exception as exc:
                 # Capture any exception and send a string form back out of the worker.

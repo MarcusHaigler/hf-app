@@ -150,9 +150,14 @@ class HandGestureDetector:
         self.border_crossed = border_state["crossed"]
         self.outer_border_crossed = False
 
-        border_color = (0, 0, 255) if border_state["crossed"] else (0, 255, 0)
+        mode = self.backend_controls.active_mode_name()
+        border_color = {
+            'neutral': (0, 255, 0),
+            'cursor': (255, 255, 0),
+        }.get(mode, (255, 255, 255))
+
         cv2.circle(image, border_state["center"], border_state["radius"], border_color, 2)
-        cv2.circle(image, border_state["outer_center"], border_state["outer_radius"], (255, 255, 0), 1)
+        cv2.circle(image, border_state["outer_center"], border_state["outer_radius"], border_color, 1)
 
         return image
 
@@ -337,8 +342,13 @@ class HandGestureDetector:
                         cv2.circle(image, border_state["crossing_point"], 7, (255, 0, 255), -1)
                         cv2.putText(image, crossing_direction, border_state["crossing_point"], cv2.FONT_HERSHEY_PLAIN, self.FONT_SIZE, (255, 0, 255), self.FONT_THICKNESS)
                 elif border_state["center"] is not None:
-                    cv2.circle(image, border_state["center"], border_state["radius"], (0, 255, 0), 2)
-                    cv2.circle(image, border_state["outer_center"], border_state["outer_radius"], (255, 255, 0), 1)
+                    mode = self.backend_controls.active_mode_name()
+                    border_color = {
+                        'neutral': (0, 255, 0),
+                        'cursor': (255, 255, 0),
+                    }.get(mode, (255, 255, 255))
+                    cv2.circle(image, border_state["center"], border_state["radius"], border_color, 2)
+                    cv2.circle(image, border_state["outer_center"], border_state["outer_radius"], border_color, 1)
 
             gesture_label = "Unknown"
             if hand_index < len(detection_result.gestures):
