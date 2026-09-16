@@ -40,7 +40,7 @@ class NeutralMode(ControlHelper):
             self.update_gesture_chain(gesture, direction)
             self.last_message = gesture, direction
             print('updated gesture chain:', self.active_gesture_chain)
-
+ 
             # compare the gesture chain to the mapping and execute the corresponding action if it exists
             action = self.check_mapping(self.active_gesture_chain, self.neutral_state_mapping)
             if action != None:

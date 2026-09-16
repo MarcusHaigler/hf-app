@@ -76,6 +76,8 @@ class Control_Manager:
                     if new_mode not in self.active_control_mappings:
                         raise ValueError(f"Invalid control mode: {new_mode}. Valid modes are: {list(self.active_control_mappings.keys())}")
                     else:
+                        if new_mode == 'cursor':
+                            self.cursor_mode.reset_sequence()
                         self.active_control_mode.value = MODE_IDS[new_mode]
                         print(f'control mode set to {new_mode}')
 

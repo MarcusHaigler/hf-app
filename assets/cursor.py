@@ -11,6 +11,7 @@ class CursorMode(ControlHelper):
         super().__init__(target_flag, lock,target_queue)
 
         self.last_message = None, None
+        self.last_sequence = None # to prevent continous function calls (specifically for click functions)
 
         self.a = None
         self.b = None
@@ -44,7 +45,7 @@ class CursorMode(ControlHelper):
 
                 # check if cursor sequence is complete
                 action = self.check_mapping(self.curr_cursor_sequence, self.cursor_gesture_sequence_mappings)
-                if action != None:
+                if action is not None:
                     action()
         else:
             if gesture == 'Closed_Fist' and direction != None:
@@ -55,22 +56,37 @@ class CursorMode(ControlHelper):
                     self.update_cursor_sequence(gesture, direction)
                     self.last_message = gesture, direction
                     print('updated cursor sequence:', self.curr_cursor_sequence)
-                action = self.check_mapping(self.curr_cursor_sequence, self.active_cursor_mapping)
-                if action != None:
-                    action()
+                    
+
+                # confirm that the new sequence is fresh
+                if self.curr_cursor_sequence != self.last_sequence:
+                    sequence = list(self.curr_cursor_sequence)
+                    self.last_sequence = sequence
+
+                    action = self.check_mapping(sequence, self.active_cursor_mapping)
+                    if action is not None:
+                        action()
+
+    def reset_sequence(self):
+        """Clear gesture history when cursor mode is entered again."""
+        self.last_message = None, None
+        self.last_sequence = None
+        self.a = None
+        self.b = None
+        self.curr_cursor_sequence[:] = [None, None]
 
     def right_click(self):
         '''
         function to perform a right click
         '''
-        #mouse.Controller().click(mouse.Button.right, 1)
+        mouse.Controller().click(mouse.Button.right, 1)
         print('right click called')
 
     def left_click(self):
         '''
         function to perform a left click
         '''
-        #mouse.Controller().click(mouse.Button.left, 1)
+        mouse.Controller().click(mouse.Button.left, 1)
         print('left click called')
 
     def update_cursor_sequence(self, new_val, new_direction=None):
@@ -86,21 +102,36 @@ class CursorMode(ControlHelper):
     def move_cursor(self, direction):
         '''
         move the cursor relative to its current position in a specified direction
-        
-        current_position = mouse.Controller().position
-        x, y = current_position
+        '''
+
+        if direction == None:
+            return
+
+        direction_mapping = {
+            
+        }
+
+
 
         if direction == 'up':
-            y -= 10
-        elif direction == 'down':
-            y += 10
+           mouse.Controller().move(0, -5)
+        elif direction == 'up-left':
+            mouse.Controller().move(-5, -5)
+        elif direction == 'up-right':
+            mouse.Controller().move(5,-5)
+
+        if direction == 'down':
+            mouse.Controller().move(0, 5)
+        elif direction == 'down-left':
+            mouse.Controller().move(-5, 5)
+        elif direction == 'down-right':
+            mouse.Controller().move(5, 5)
+
         elif direction == 'left':
-            x -= 10
+            mouse.Controller().move(-5, 0)
         elif direction == 'right':
-            x += 10
-            
-        mouse.Controller().position = (x, y)
-        '''
+            mouse.Controller().move(5, 0)
+
         if direction == None:
             return
 
