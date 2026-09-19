@@ -22,6 +22,9 @@ class CursorMode(ControlHelper):
         }
 
         self.active_cursor_mapping = {
+            (('Thumb_Up', None), ('Thumb_Up', 'up')) : self.scroll_up,
+            (('Thumb_Up', None), ('Thumb_Up', 'down')) : self.scroll_down,
+            (('Pointing_Up', None), ('Pointing_Up', 'left')) : self.double_left_click,
             (('Closed_Fist', None),('Thumb_Up', None)) : self.left_click,
             (('Closed_Fist', None),('Thumb_Down', None)) : self.right_click,
             (('Pointing_Up', None), ('Pointing_Up', 'up')) : self.activate_neutral_control_mode
@@ -74,6 +77,30 @@ class CursorMode(ControlHelper):
         self.a = None
         self.b = None
         self.curr_cursor_sequence[:] = [None, None]
+
+    def scroll_down(self):
+        '''
+        scroll down on the active window
+        '''
+
+        mouse.Controller().scroll(0, 3)
+        print('scroll down called')
+
+    def scroll_up(self):
+        '''
+        scroll up on the active window
+        '''
+
+        mouse.Controller().scroll(0, -3)
+        print('scroll up called')
+
+    def double_left_click(self):
+        '''
+        double click at the cursor's position
+        '''
+
+        mouse.Controller().click(mouse.Button.left, 2)
+        print('left click called')
 
     def right_click(self):
         '''

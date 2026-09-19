@@ -3,7 +3,6 @@ from .neutral import NeutralMode
 from.cursor import CursorMode
 from ctypes import c_int
 
-
 NEUTRAL_MODE = 0
 CURSOR_MODE = 1
 MODE_IDS = {
@@ -11,7 +10,6 @@ MODE_IDS = {
     'cursor': CURSOR_MODE,
 }
 MODE_NAMES = {mode_id: name for name, mode_id in MODE_IDS.items()}
-
 
 class Control_Manager:
     '''

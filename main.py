@@ -6,6 +6,10 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from multiprocessing import Lock, Value
 from assets.control_manager import Control_Manager
+from pathlib import Path
+
+MODEL_PATH = Path(__file__).resolve().parent / "mediapipe_hand-tflite-float" / "gesture_recognizer.task"
+print(MODEL_PATH)
 
 class HandGestureDetector:
     """Encapsulates the gesture recognizer, gesture queue, and border logic."""
@@ -17,7 +21,7 @@ class HandGestureDetector:
     FONT_THICKNESS = 1
     TEXT_COLOR = (255, 0, 0)
 
-    def __init__(self, model_path='C:/Users/black/Coding/testing/handsfree/mediapipe_hand-tflite-float/gesture_recognizer.task'):
+    def __init__(self, model_path=None):
         # MediaPipe returns results asynchronously. These attributes let the camera loop
         # safely pair the newest result with the frame that produced it.
         self.latest_result = None
@@ -442,5 +446,5 @@ class HandGestureDetector:
             cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    detector = HandGestureDetector()
+    detector = HandGestureDetector(f'{MODEL_PATH}')
     detector.run_camera_loop()
