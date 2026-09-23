@@ -1,4 +1,5 @@
 import threading
+import tkinter as tk
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -400,18 +401,106 @@ class HandGestureDetector:
             self.pending_timestamp = None
 
     def run_camera_loop(self):
-        """Open the camera, process frames, and display the annotated output."""
+        """Run the camera worker and display its frames inside a Tk window."""
+        root = tk.Tk()
+        root.title("Hand Detection")
+        root.geometry("960x720")
+
+        video_label = tk.Label(root, background="black")
+        video_label.pack(fill=tk.BOTH, expand=True)
+
+        stop_event = threading.Event()
+        latest_display = {"frame": None}
+        display_lock = threading.Lock()
+        last_window_state = {"value": None}
+
+        def handle_window_state(state):
+            """Call a state handler only when the window enters a new state."""
+            if state == last_window_state["value"]:
+                return
+
+            last_window_state["value"] = state
+            if state == "iconic":
+                self.on_window_minimized()
+
+            elif state == "zoomed":
+                self.on_window_maximized()
+
+            elif state == "normal":
+                self.on_window_restored()
+
+        def on_window_configure(_event):
+            """Handle resize and maximize state changes."""
+            state = root.state()
+            handle_window_state(state)
+
+        def on_window_unmap(_event):
+            """Handle the window being minimized on platforms using Unmap."""
+            if root.state() == "iconic":
+                handle_window_state("iconic")
+
+        def on_window_map(_event):
+            """Handle the window being restored after minimization."""
+            handle_window_state(root.state())
+
+        def update_video():
+            with display_lock:
+                frame = latest_display["frame"]
+
+            if frame is not None:
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                height, width = rgb_frame.shape[:2]
+                ppm_header = f"P6\n{width} {height}\n255\n".encode("ascii")
+                photo = tk.PhotoImage(data=ppm_header + rgb_frame.tobytes(), format="PPM")
+                video_label.configure(image=photo)
+                video_label.image = photo
+
+            if not stop_event.is_set():
+                root.after(15, update_video)
+
+        def close_window():
+            stop_event.set()
+            camera_thread.join(timeout=2)
+            self.backend_controls.close()
+            root.destroy()
+
+        root.bind("<Configure>", on_window_configure)
+        root.bind("<Unmap>", on_window_unmap)
+        root.bind("<Map>", on_window_map)
+        root.protocol("WM_DELETE_WINDOW", close_window)
+
+        camera_thread = threading.Thread(
+            target=self._capture_frames,
+            args=(stop_event, latest_display, display_lock),
+            daemon=True,
+        )
+        camera_thread.start()
+        root.after(0, update_video)
+        root.mainloop()
+
+    def on_window_maximized(self):
+        """Run application logic after the video window is maximized."""
+        print("Window maximized")
+
+    def on_window_minimized(self):
+        """Run application logic after the video window is minimized."""
+        print("Window minimized")
+
+    def on_window_restored(self):
+        """Run application logic after the video window is restored."""
+        print("Window restored")
+
+    def _capture_frames(self, stop_event, latest_display, display_lock):
+        """Capture and process frames without blocking Tk's event loop."""
         with vision.GestureRecognizer.create_from_options(self.options) as detector:
             cap = cv2.VideoCapture(0)
 
-            #window_name = 'hands free cursor'
-            #cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-            #cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-
             if not cap.isOpened():
-                raise RuntimeError("Cannot open camera")
+                print("Cannot open camera")
+                stop_event.set()
+                return
 
-            while True:
+            while not stop_event.is_set():
                 ret, frame = cap.read()
                 if not ret:
                     print("Can't receive frame (stream end?). Exiting ...")
@@ -434,16 +523,17 @@ class HandGestureDetector:
                     current_frame_bgr = self.latest_frame_bgr
 
                 if current_result is not None and current_frame_bgr is not None:
-                    annotated_frame = self.visualize(current_frame_bgr, current_result)
-                    cv2.imshow("Hand Detection", annotated_frame)
+                    display_frame = self.visualize(current_frame_bgr, current_result)
                 else:
-                    cv2.imshow("Hand Detection", frame)
+                    display_frame = frame
 
-                if cv2.waitKey(1) == ord("q"):
-                    break
+                with display_lock:
+                    latest_display["frame"] = display_frame.copy()
 
             cap.release()
-            cv2.destroyAllWindows()
+            stop_event.set()
+
+
 
 if __name__ == "__main__":
     detector = HandGestureDetector(f'{MODEL_PATH}')
