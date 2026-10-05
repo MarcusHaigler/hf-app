@@ -70,6 +70,22 @@ class HandGestureDetector:
         self.outer_border_center = None
         self.outer_border_radius = 0
 
+        # main window
+        self.root = tk.Tk()
+        self.root.title("Hand Detection")
+        self.root.geometry("960x720")
+
+        # label to display the live stream
+        self.video_label = tk.Label(self.root, background="black")
+        self.video_label.pack(fill=tk.BOTH, expand=True)
+
+        # mini window variables
+        self.mini_window = None
+        self.mini_window_label = None
+        self.mini_status_lock = threading.Lock()
+        self.mini_gesture = "Unknown"
+        self.mini_border_drawn = False
+
         self.base_options = python.BaseOptions(model_asset_path=model_path)
         self.options = vision.GestureRecognizerOptions(
             base_options=self.base_options,
@@ -282,8 +298,11 @@ class HandGestureDetector:
     def visualize(self, image, detection_result) -> np.ndarray:
         """Draw gesture, handedness, and hand landmarks on a BGR image."""
         image = image.copy()
+        border_drawn_on_frame = False
 
         if not hasattr(detection_result, "hand_landmarks"):
+            with self.mini_status_lock:
+                self.mini_border_drawn = False
             return image
 
         connections = [
@@ -334,12 +353,14 @@ class HandGestureDetector:
             if self.activate_border_flag.value:
                 if border_state is not None and not border_state["active"]:
                     image = self.draw_border(image, hand_landmarks[5], hand_landmarks[0], border_state)
+                    border_drawn_on_frame = True
 
             possible_crossing_direction = None # store the crossing direction for later
             if border_state is not None and border_state["active"]:
                 crossed, crossing_direction = self.monitor_hand(hand_landmarks, image.shape, border_state)
                 possible_crossing_direction = crossing_direction
                 if crossed:
+                    border_drawn_on_frame = True
                     possible_crossing_direction = crossing_direction
                     cv2.circle(image, border_state["center"], border_state["radius"], (0, 0, 255), 2)
                     cv2.circle(image, border_state["outer_center"], border_state["outer_radius"], (0, 0, 255), 1)
@@ -347,6 +368,7 @@ class HandGestureDetector:
                         cv2.circle(image, border_state["crossing_point"], 7, (255, 0, 255), -1)
                         cv2.putText(image, crossing_direction, border_state["crossing_point"], cv2.FONT_HERSHEY_PLAIN, self.FONT_SIZE, (255, 0, 255), self.FONT_THICKNESS)
                 elif border_state["center"] is not None:
+                    border_drawn_on_frame = True
                     mode = self.backend_controls.active_mode_name()
                     border_color = {
                         'neutral': (0, 255, 0),
@@ -365,6 +387,10 @@ class HandGestureDetector:
                 hand_state["gesture"] = gesture_label
                 hand_state["active"] = True
                 self.backend_controls.submit(gesture_label, possible_crossing_direction, self.border_active)
+                
+                # Store the gesture for the mini window (thread-safe update from camera thread)
+                with self.mini_status_lock:
+                    self.mini_gesture = gesture_label
 
             text_y = 30 + hand_index * 40
             cv2.putText(
@@ -386,6 +412,9 @@ class HandGestureDetector:
                 self.FONT_THICKNESS,
             )
 
+        with self.mini_status_lock:
+            self.mini_border_drawn = border_drawn_on_frame
+
         return image
 
     def handle_result(self, result, output_image, timestamp):
@@ -402,12 +431,6 @@ class HandGestureDetector:
 
     def run_camera_loop(self):
         """Run the camera worker and display its frames inside a Tk window."""
-        root = tk.Tk()
-        root.title("Hand Detection")
-        root.geometry("960x720")
-
-        video_label = tk.Label(root, background="black")
-        video_label.pack(fill=tk.BOTH, expand=True)
 
         stop_event = threading.Event()
         latest_display = {"frame": None}
@@ -431,17 +454,23 @@ class HandGestureDetector:
 
         def on_window_configure(_event):
             """Handle resize and maximize state changes."""
-            state = root.state()
+            state = self.root.state()
             handle_window_state(state)
 
-        def on_window_unmap(_event):
-            """Handle the window being minimized on platforms using Unmap."""
-            if root.state() == "iconic":
+        def on_window_unmap(event):
+            """
+            handle the window being minimized on platforms using Unmap
+            """
+            
+            if self.root.state() == "iconic":
                 handle_window_state("iconic")
-
-        def on_window_map(_event):
-            """Handle the window being restored after minimization."""
-            handle_window_state(root.state())
+                
+        def on_window_map(event):
+            """
+            handle the window being restored after minimization
+            """
+            
+            handle_window_state(self.root.state())
 
         def update_video():
             with display_lock:
@@ -452,22 +481,35 @@ class HandGestureDetector:
                 height, width = rgb_frame.shape[:2]
                 ppm_header = f"P6\n{width} {height}\n255\n".encode("ascii")
                 photo = tk.PhotoImage(data=ppm_header + rgb_frame.tobytes(), format="PPM")
-                video_label.configure(image=photo)
-                video_label.image = photo
+                self.video_label.configure(image=photo)
+                self.video_label.image = photo
+
+            # Update mini window if it exists
+            if self.mini_window is not None and self.mini_window.winfo_exists():
+                with self.mini_status_lock:
+                    gesture = self.mini_gesture
+
+                color = self.get_mini_window_background_color()
+
+                self.mini_window_label.config(
+                    text=f"Gesture: {gesture}",
+                    bg=color
+                )
+                self.mini_window.configure(bg=color)
 
             if not stop_event.is_set():
-                root.after(15, update_video)
+                self.root.after(15, update_video)
 
         def close_window():
             stop_event.set()
             camera_thread.join(timeout=2)
             self.backend_controls.close()
-            root.destroy()
+            self.root.destroy()
 
-        root.bind("<Configure>", on_window_configure)
-        root.bind("<Unmap>", on_window_unmap)
-        root.bind("<Map>", on_window_map)
-        root.protocol("WM_DELETE_WINDOW", close_window)
+        self.root.bind("<Configure>", on_window_configure)
+        self.root.bind("<Unmap>", on_window_unmap)
+        self.root.bind("<Map>", on_window_map)
+        self.root.protocol("WM_DELETE_WINDOW", close_window)
 
         camera_thread = threading.Thread(
             target=self._capture_frames,
@@ -475,20 +517,93 @@ class HandGestureDetector:
             daemon=True,
         )
         camera_thread.start()
-        root.after(0, update_video)
-        root.mainloop()
+        self.root.after(0, update_video)
+        self.root.mainloop()
 
     def on_window_maximized(self):
-        """Run application logic after the video window is maximized."""
-        print("Window maximized")
+        '''
+        destroy the mini window and reset its variables
+        '''
+
+        if self.mini_window == None:
+            return
+        else:
+
+            # reset the class variables for the mini window
+            self.mini_window.destroy()
+            self.mini_window = None
+            self.mini_window_label = None    
+            self.mini_window_background = None
 
     def on_window_minimized(self):
-        """Run application logic after the video window is minimized."""
-        print("Window minimized")
+        '''
+        create the mini window using class variables
+        do nothing if it already exists
+        '''
+
+        if self.mini_window != None:
+            return
+        else:
+
+            # use the class variables to create the mini window
+            self.mini_window = tk.Toplevel(self.root)
+            self.mini_window.title("Hand Detection")
+            self.mini_window.geometry("200x100")
+            self.mini_window.attributes("-topmost", True)
+
+            # Get current gesture and mode for initialization
+            with self.mini_status_lock:
+                gesture = self.mini_gesture
+            color = self.get_mini_window_background_color()
+
+            self.mini_window_label = tk.Label(
+                self.mini_window,
+                text=f"Gesture: {gesture}",
+                font=('Arial', 16),
+                bg=color,
+            )
+            self.mini_window_label.pack(pady=20, fill=tk.BOTH, expand=True)
+            self.mini_window.configure(bg=color)
+
+            # Close handler to clean up references if user closes the mini window
+            def on_mini_window_close():
+                self.mini_window.destroy()
+                self.mini_window = None
+                self.mini_window_label = None
+
+            self.mini_window.protocol("WM_DELETE_WINDOW", on_mini_window_close)
+
+    def get_mini_window_background_color(self):
+        '''
+        determine the color of the mini window from border rendering on the latest frame
+        '''
+
+        with self.mini_status_lock:
+            border_drawn = self.mini_border_drawn
+
+        if border_drawn:
+            
+            if self.backend_controls.active_mode_name() == "neutral":
+                return "green"
+            elif self.backend_controls.active_mode_name() == "cursor":
+                    return 'blue'
+        else:
+            return "white"
 
     def on_window_restored(self):
-        """Run application logic after the video window is restored."""
-        print("Window restored")
+        '''
+        destroy the mini window if it exists and resset its variables
+        '''
+        
+        if self.mini_window == None:
+            return
+        else:
+
+            # reset the class variables for the mini window
+            self.mini_window.destroy()
+            self.mini_window = None
+            self.mini_window_label = None    
+            self.mini_window_background = None
 
     def _capture_frames(self, stop_event, latest_display, display_lock):
         """Capture and process frames without blocking Tk's event loop."""
@@ -532,8 +647,6 @@ class HandGestureDetector:
 
             cap.release()
             stop_event.set()
-
-
 
 if __name__ == "__main__":
     detector = HandGestureDetector(f'{MODEL_PATH}')
